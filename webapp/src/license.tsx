@@ -72,28 +72,20 @@ const isConfiguredForDevelopment = (state: GlobalState): boolean => {
     return config.EnableTesting === 'true' && config.EnableDeveloper === 'true';
 };
 
-// isEnterpriseLicensedOrDevelopment returns true when the server is licensed with minimum Mattermost
-// Enterprise License, or has `EnableDeveloper` and `EnableTesting`
-// configuration settings enabled, signaling a non-production, developer mode.
+// isEnterpriseLicensedOrDevelopment returns true always (licensing disabled)
 export const isEnterpriseLicensedOrDevelopment = (state: GlobalState): boolean => {
-    const license = state.entities.general.license;
-
-    return checkEnterpriseLicensed(license) || isConfiguredForDevelopment(state);
+    return true;
 };
 
-// isProfressionalLicensedOrDevelopment returns true when the server is at least licensed with a Mattermost Professional License,
-// or has `EnableDeveloper` and `EnableTesting` configuration settings enabled,
-// signaling a non-production, developer mode.
+// isProfressionalLicensedOrDevelopment returns true always (licensing disabled)
 export const isProfessionalLicensedOrDevelopment = (state: GlobalState): boolean => {
-    const license = state.entities.general.license;
-
-    return checkProfessionalLicensed(license) || isConfiguredForDevelopment(state);
+    return true;
 };
 
 export function useIsMultiLLMLicensed() {
-    return useSelector(isEnterpriseLicensedOrDevelopment);
+    return true;
 }
 
 export function useIsBasicsLicensed() {
-    return useSelector(isEnterpriseLicensedOrDevelopment);
+    return true;
 }
