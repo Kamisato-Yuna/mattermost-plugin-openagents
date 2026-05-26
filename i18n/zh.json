@@ -1,0 +1,8 @@
+{
+  "agents.agent_mention_reminder_fallback": "要与智能体对话，您必须@提及他们。",
+  "agents.no_longer_access_error": "抱歉，您不再有权访问原始线程。",
+  "agents.stream_to_post_access_llm_error": "抱歉！访问LLM时发生错误。",
+  "agents.summarize_call_recording_processing": "正在处理音频转录。这将需要一些时间...",
+  "agents.summarize_recording": "好的，我将总结这段录音：%s/_redirect/pl/%s\n",
+  "mcp_tools.update_plugin_server_failed": "更新插件服务器失败"
+}
