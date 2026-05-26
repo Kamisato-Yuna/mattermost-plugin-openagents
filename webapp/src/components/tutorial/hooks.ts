@@ -25,7 +25,7 @@ type PunchoutOffset = {
     height: number;
 };
 
-const PREFERENCE_CATEGORY = 'mattermost-ai-tutorial';
+const PREFERENCE_CATEGORY = 'mattermost-openagents-tutorial';
 
 export function useMeasurePunchouts(
     elementIds: string[],

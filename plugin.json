@@ -1,10 +1,10 @@
 {
-  "id": "mattermost-ai",
-  "name": "Agents",
-  "description": "",
-  "homepage_url": "https://github.com/mattermost/mattermost-plugin-agents",
-  "support_url": "https://github.com/mattermost/mattermost-plugin-agents/issues",
-  "release_notes_url": "https://github.com/mattermost/mattermost-plugin-agents",
+  "id": "mattermost-openagents",
+  "name": "Open Agents",
+  "description": "Mattermost Open Agents 是一个 Mattermost AI 插件，它不受许可限制，完全开放源码，支持本地部署和云端 LLM 集成。",
+  "homepage_url": "https://github.com/mattermost/mattermost-plugin-openagents",
+  "support_url": "https://github.com/mattermost/mattermost-plugin-openagents/issues",
+  "release_notes_url": "https://github.com/mattermost/mattermost-plugin-openagents/releases",
   "icon_path": "assets/bot_icon.png",
   "min_server_version": "6.2.1",
   "server": {

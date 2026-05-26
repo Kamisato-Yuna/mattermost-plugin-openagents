@@ -562,7 +562,7 @@ func (p *Plugin) applyTelemetryConfig() {
 		p.telemetryShutdown = nil
 	}
 
-	shutdown, err := telemetry.Init(context.Background(), "mattermost-ai-agents", manifest.Version, mode, endpoint, &p.pluginAPI.Log)
+	shutdown, err := telemetry.Init(context.Background(), "mattermost-openagents", manifest.Version, mode, endpoint, &p.pluginAPI.Log)
 	if err != nil {
 		p.pluginAPI.Log.Error("Failed to initialize OpenTelemetry", "error", err, "mode", string(mode))
 		// Leave previous mode tracked so the next change still triggers a re-init.

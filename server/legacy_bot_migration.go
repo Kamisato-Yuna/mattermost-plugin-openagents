@@ -54,7 +54,7 @@ func migrateLegacyConfigBotsToUserAgents(api plugin.API, pluginAPI *pluginapi.Cl
 		byUsername[a.Name] = struct{}{}
 	}
 
-	previousMMBots, err := pluginAPI.Bot.List(0, 1000, pluginapi.BotOwner("mattermost-ai"), pluginapi.BotIncludeDeleted())
+	previousMMBots, err := pluginAPI.Bot.List(0, 1000, pluginapi.BotOwner("mattermost-openagents"), pluginapi.BotIncludeDeleted())
 	if err != nil {
 		return false, fmt.Errorf("failed to list mattermost bots: %w", err)
 	}
