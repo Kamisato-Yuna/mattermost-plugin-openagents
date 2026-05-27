@@ -1,0 +1,273 @@
+stages:
+  - lint
+  - test
+  - build
+  - e2e
+  - deploy
+  - release
+
+variables:
+  NODE_VERSION: "24.11.0"
+  MM_IMAGE: "mattermost/mattermost-enterprise-edition:11.5.1"
+  POSTGRES_IMAGE: "pgvector/pgvector:pg15"
+  EXCLUDE_REAL_API_TESTS: "true"
+
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - .go/pkg/mod
+    - webapp/node_modules
+    - e2e/node_modules
+
+# ========================================
+# Stage: Lint
+# ========================================
+lint:
+  stage: lint
+  image: golang:1.24
+  script:
+    - make check-style
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ========================================
+# Stage: Test
+# ========================================
+unit-tests:
+  stage: test
+  image: golang:1.24
+  services:
+    - name: ${POSTGRES_IMAGE}
+      alias: postgres
+      variables:
+        POSTGRES_USER: mmuser
+        POSTGRES_PASSWORD: mostest
+        POSTGRES_DB: postgres
+  script:
+    - export PG_ROOT_DSN="postgres://mmuser:mostest@postgres:5432/postgres?sslmode=disable"
+    - make test
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+verify-i18n:
+  stage: test
+  image: node:${NODE_VERSION}
+  script:
+    - cd webapp && npm ci
+    - make check-i18n
+    - make check-locks
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ========================================
+# Stage: Build
+# ========================================
+build:
+  stage: build
+  image: golang:1.24
+  script:
+    - make dist-ci
+  artifacts:
+    paths:
+      - dist/*.tar.gz
+    expire_in: 1 day
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ========================================
+# Stage: E2E (分层测试)
+# ========================================
+.e2e-template: &e2e-template
+  image: node:${NODE_VERSION}
+  services:
+    - name: ${MM_IMAGE}
+      alias: mattermost
+  before_script:
+    - cd e2e && npm ci
+    - npx playwright install --with-deps
+  script:
+    - node ./scripts/ci-test-groups.mjs validate
+    - |
+      SPEC_OUTPUT="$(node ./scripts/ci-test-groups.mjs list $TEST_GROUP)"
+      npx playwright test --project=chromium $SPEC_OUTPUT || true
+  artifacts:
+    when: always
+    paths:
+      - e2e/playwright-report/
+      - e2e/logs/
+    expire_in: 7 days
+  variables:
+    MM_SITEURL: "http://mattermost:8065"
+    DB_CONNECTION_STRING: "postgres://mmuser:mostest@postgres:5432/postgres?sslmode=disable"
+
+# Dev 分支：仅 Mock API 测试
+e2e-shard-1:
+  <<: *e2e-template
+  variables:
+    TEST_GROUP: "e2e-shard-1"
+    EXCLUDE_REAL_API_TESTS: "true"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+
+e2e-shard-2:
+  <<: *e2e-template
+  variables:
+    TEST_GROUP: "e2e-shard-2"
+    EXCLUDE_REAL_API_TESTS: "true"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+
+e2e-shard-3:
+  <<: *e2e-template
+  variables:
+    TEST_GROUP: "e2e-shard-3"
+    EXCLUDE_REAL_API_TESTS: "true"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+
+e2e-shard-4:
+  <<: *e2e-template
+  variables:
+    TEST_GROUP: "e2e-shard-4"
+    EXCLUDE_REAL_API_TESTS: "true"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+
+# Main 分支：完整 E2E 测试
+e2e-real-apis:
+  <<: *e2e-template
+  parallel:
+    matrix:
+      - TEST_GROUP:
+          - llmbot-real-citations
+          - llmbot-real-reasoning
+          - llmbot-real-edge-cases
+          - channel-analysis-real
+  variables:
+    EXCLUDE_REAL_API_TESTS: "false"
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    OPENAI_API_KEY: ${OPENAI_API_KEY}
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  when: manual
+
+# ========================================
+# Stage: Deploy (分层)
+# ========================================
+deploy-dev:
+  stage: deploy
+  image: curlimages/curl:latest
+  before_script:
+    - apk add --no-cache jq
+  script:
+    - |
+      PLUGIN_FILE=$(ls dist/*.tar.gz)
+      echo "Plugin file: $PLUGIN_FILE"
+
+      for server in $DEV_SERVERS; do
+        url=$(echo "$server" | jq -r '.url')
+        token=$(echo "$server" | jq -r '.token')
+        name=$(echo "$server" | jq -r '.name // "Dev Server"')
+
+        echo "Deploying to: $name ($url)"
+
+        response=$(curl -s -w '\n%{http_code}' \
+          -H "Authorization: Bearer $token" \
+          -X POST \
+          -F "plugin=@$PLUGIN_FILE" \
+          -F "force=true" \
+          "$url/api/v4/plugins")
+
+        http_code=$(echo "$response" | tail -n1)
+
+        if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+          echo "✓ Deployment to $name successful"
+        else
+          echo "✗ Deployment to $name failed (HTTP $http_code)"
+          exit 1
+        fi
+      done
+  environment:
+    name: development
+  variables:
+    DEV_SERVERS: ${CI_MM_DEV_SERVERS}
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+  only:
+    variables:
+      - $CI_MM_DEV_SERVERS
+
+deploy-staging:
+  stage: deploy
+  image: curlimages/curl:latest
+  before_script:
+    - apk add --no-cache jq
+  script:
+    - |
+      PLUGIN_FILE=$(ls dist/*.tar.gz)
+      echo "Plugin file: $PLUGIN_FILE"
+
+      for server in $STAGING_SERVERS; do
+        url=$(echo "$server" | jq -r '.url')
+        token=$(echo "$server" | jq -r '.token')
+        name=$(echo "$server" | jq -r '.name // "Staging Server"')
+
+        echo "Deploying to: $name ($url)"
+
+        response=$(curl -s -w '\n%{http_code}' \
+          -H "Authorization: Bearer $token" \
+          -X POST \
+          -F "plugin=@$PLUGIN_FILE" \
+          -F "force=true" \
+          "$url/api/v4/plugins")
+
+        http_code=$(echo "$response" | tail -n1)
+
+        if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+          echo "✓ Deployment to $name successful"
+        else
+          echo "✗ Deployment to $name failed (HTTP $http_code)"
+          exit 1
+        fi
+      done
+  environment:
+    name: staging
+  variables:
+    STAGING_SERVERS: ${CI_MM_STAGING_SERVERS}
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  only:
+    variables:
+      - $CI_MM_STAGING_SERVERS
+
+# ========================================
+# Stage: Release
+# ========================================
+release:
+  stage: release
+  image: node:${NODE_VERSION}
+  before_script:
+    - npm install -g github-release-cli
+  script:
+    - |
+      PLUGIN_FILE=$(ls dist/*.tar.gz 2>/dev/null || echo "")
+      FIPS_FILE=$(ls dist-fips/*.tar.gz 2>/dev/null || echo "")
+
+      github-release upload \
+        --user ${CI_PROJECT_NAMESPACE} \
+        --repo ${CI_PROJECT_NAME} \
+        --tag ${CI_COMMIT_TAG} \
+        --file $PLUGIN_FILE \
+        --file $FIPS_FILE \
+        --name "${CI_COMMIT_TAG}" \
+        --body "Release ${CI_COMMIT_TAG}\n\nCommit: ${CI_COMMIT_SHA}"
+  environment:
+    name: production
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+  only:
+    - tags

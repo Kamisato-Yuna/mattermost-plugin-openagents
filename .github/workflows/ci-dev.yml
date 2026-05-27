@@ -1,0 +1,351 @@
+name: CI - Dev Branch
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+jobs:
+  # ========================================
+  # 1. 代码风格检查（必须）
+  # ========================================
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+      - uses: mattermost/actions/plugin-ci/lint@main
+
+  # ========================================
+  # 2. 单元测试（必须）
+  # ========================================
+  unit-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: mmuser
+          POSTGRES_PASSWORD: mostest
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+      - name: Run tests
+        env:
+          PG_ROOT_DSN: "postgres://mmuser:mostest@localhost:5432/postgres?sslmode=disable"
+          MM_SERVICESETTINGS_ENABLEDEVELOPER: true
+        run: |
+          make test
+
+  # ========================================
+  # 3. 构建插件（必须）
+  # ========================================
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+      - name: Build plugin
+        run: |
+          make dist-ci
+
+  # ========================================
+  # 4. i18n 和依赖检查（必须）
+  # ========================================
+  verify-diffs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.11.0
+      - name: Install webapp dependencies
+        run: cd webapp && npm ci
+      - name: Check webapp i18n catalog drift
+        run: make check-i18n
+      - name: Check package-lock.json drift
+        run: make check-locks
+
+  # ========================================
+  # 5. E2E 快速测试（Mock API）
+  # ========================================
+  e2e-build:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.11.0
+      - name: Build plugin bundle for e2e jobs
+        run: make dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e2e-plugin-dist
+          path: ./dist/*.tar.gz
+          retention-days: 1
+
+  e2e-shard-1:
+    needs: e2e-build
+    timeout-minutes: 60
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    name: e2e-shard-1
+    env:
+      MM_IMAGE: ${{ vars.MM_IMAGE || 'mattermost/mattermost-enterprise-edition:11.5.1' }}
+      EXCLUDE_REAL_API_TESTS: 'true'
+    defaults:
+      run:
+        working-directory: ./e2e
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.11.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: e2e-plugin-dist
+          path: ./dist/
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps
+      - name: Validate CI test groups
+        run: node ./scripts/ci-test-groups.mjs validate
+      - name: Run Playwright tests for shard-1
+        shell: bash
+        run: |
+          SPEC_OUTPUT="$(node ./scripts/ci-test-groups.mjs list "e2e-shard-1")"
+          [[ -n "${SPEC_OUTPUT}" ]]
+          mapfile -t SPEC_FILES <<<"${SPEC_OUTPUT}"
+          npx playwright test --project=chromium "${SPEC_FILES[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-shard-1
+          path: ./e2e/playwright-report/
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: server-logs-shard-1
+          path: ./e2e/logs/server-logs.log
+          retention-days: 30
+
+  e2e-shard-2:
+    needs: e2e-build
+    timeout-minutes: 60
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    name: e2e-shard-2
+    env:
+      MM_IMAGE: ${{ vars.MM_IMAGE || 'mattermost/mattermost-enterprise-edition:11.5.1' }}
+      EXCLUDE_REAL_API_TESTS: 'true'
+    defaults:
+      run:
+        working-directory: ./e2e
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.11.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: e2e-plugin-dist
+          path: ./dist/
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps
+      - name: Validate CI test groups
+        run: node ./scripts/ci-test-groups.mjs validate
+      - name: Run Playwright tests for shard-2
+        shell: bash
+        run: |
+          SPEC_OUTPUT="$(node ./scripts/ci-test-groups.mjs list "e2e-shard-2")"
+          [[ -n "${SPEC_OUTPUT}" ]]
+          mapfile -t SPEC_FILES <<<"${SPEC_OUTPUT}"
+          npx playwright test --project=chromium "${SPEC_FILES[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-shard-2
+          path: ./e2e/playwright-report/
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: server-logs-shard-2
+          path: ./e2e/logs/server-logs.log
+          retention-days: 30
+
+  e2e-shard-3:
+    needs: e2e-build
+    timeout-minutes: 60
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    name: e2e-shard-3
+    env:
+      MM_IMAGE: ${{ vars.MM_IMAGE || 'mattermost/mattermost-enterprise-edition:11.5.1' }}
+      EXCLUDE_REAL_API_TESTS: 'true'
+    defaults:
+      run:
+        working-directory: ./e2e
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.11.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: e2e-plugin-dist
+          path: ./dist/
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps
+      - name: Validate CI test groups
+        run: node ./scripts/ci-test-groups.mjs validate
+      - name: Run Playwright tests for shard-3
+        shell: bash
+        run: |
+          SPEC_OUTPUT="$(node ./scripts/ci-test-groups.mjs list "e2e-shard-3")"
+          [[ -n "${SPEC_OUTPUT}" ]]
+          mapfile -t SPEC_FILES <<<"${SPEC_OUTPUT}"
+          npx playwright test --project=chromium "${SPEC_FILES[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-shard-3
+          path: ./e2e/playwright-report/
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: server-logs-shard-3
+          path: ./e2e/logs/server-logs.log
+          retention-days: 30
+
+  e2e-shard-4:
+    needs: e2e-build
+    timeout-minutes: 60
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    name: e2e-shard-4
+    env:
+      MM_IMAGE: ${{ vars.MM_IMAGE || 'mattermost/mattermost-enterprise-edition:11.5.1' }}
+      EXCLUDE_REAL_API_TESTS: 'true'
+    defaults:
+      run:
+        working-directory: ./e2e
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.11.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: e2e-plugin-dist
+          path: ./dist/
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps
+      - name: Validate CI test groups
+        run: node ./scripts/ci-test-groups.mjs validate
+      - name: Run Playwright tests for shard-4
+        shell: bash
+        run: |
+          SPEC_OUTPUT="$(node ./scripts/ci-test-groups.mjs list "e2e-shard-4")"
+          [[ -n "${SPEC_OUTPUT}" ]]
+          mapfile -t SPEC_FILES <<<"${SPEC_OUTPUT}"
+          npx playwright test --project=chromium "${SPEC_FILES[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-shard-4
+          path: ./e2e/playwright-report/
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: server-logs-shard-4
+          path: ./e2e/logs/server-logs.log
+          retention-days: 30
+
+  # ========================================
+  # 6. 开发环境部署（可选）
+  # ========================================
+  deploy-dev:
+    needs: [lint, unit-tests, build, verify-diffs, e2e-shard-1, e2e-shard-2, e2e-shard-3, e2e-shard-4]
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+      - name: Build plugin
+        run: make dist
+
+      - name: Deploy to Dev Server
+        env:
+          MM_DEV_SERVER_URL: ${{ secrets.MM_DEV_SERVER_URL }}
+          MM_DEV_TOKEN: ${{ secrets.MM_DEV_TOKEN }}
+        run: |
+          PLUGIN_FILE=$(ls dist/*.tar.gz)
+          echo "Found plugin bundle: $PLUGIN_FILE"
+          echo "Deploying to: $MM_DEV_SERVER_URL"
+
+          response=$(curl -s -w '\n%{http_code}' \
+            -H "Authorization: Bearer $MM_DEV_TOKEN" \
+            -X POST \
+            -F "plugin=@$PLUGIN_FILE" \
+            -F "force=true" \
+            "$MM_DEV_SERVER_URL/api/v4/plugins")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+            echo "✓ Deployment successful (HTTP $http_code)"
+          else
+            echo "✗ Deployment failed (HTTP $http_code)"
+            echo "Response: $body"
+            exit 1
+          fi
+
+      - name: Verify deployment
+        if: success()
+        env:
+          MM_DEV_SERVER_URL: ${{ secrets.MM_DEV_SERVER_URL }}
+          MM_DEV_TOKEN: ${{ secrets.MM_DEV_TOKEN }}
+        run: |
+          echo "Verifying plugin status..."
+          curl -s -H "Authorization: Bearer $MM_DEV_TOKEN" \
+            "$MM_DEV_SERVER_URL/api/v4/plugins" | jq '.active[] | select(.id=="mattermost-openagents") | {id, version, state}'
